@@ -4,7 +4,7 @@ set -e
 
 image="cockroachdb/builder"
 
-if [ "$1" = "init" ]; then
+function init() {
     docker build --tag="${image}" - <<EOF
 FROM golang:1.4.2
 
@@ -21,6 +21,18 @@ RUN go get golang.org/x/tools/cmd/vet
 
 CMD ["/bin/bash"]
 EOF
+}
+
+if [ "$1" = "init" ]; then
+    init
+    exit 0
+fi
+
+if [ "$1" = "push" ]; then
+    init
+    tag="$(date +%Y%m%d-%H%M%S)"
+    docker tag "${image}" "${image}:${tag}"
+    docker push "${image}:${tag}"
     exit 0
 fi
 
