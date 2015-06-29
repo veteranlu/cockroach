@@ -9,7 +9,7 @@ RUN apt-get update -y && \
  	apt-get clean autoclean && \
  	apt-get autoremove -y && \
  	rm -rf /tmp/* /var/lib/{apt,dpkg,cache,log} && \
-	npm -g install typescript tslint && \
+	npm install ui/ && \
 	ln -s /usr/bin/nodejs /usr/bin/node
 
 ENV GOPATH /go
