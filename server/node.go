@@ -552,6 +552,21 @@ func (n *Node) waitForScanCompletion() int64 {
 	return n.scanCount
 }
 
+// waitForScanCompletion waits until the end of the next store scan and returns
+// the total number of scans completed so far.  This is exposed for use in unit
+// tests only.
+func (n *Node) waitForScanCompletion2(r int) int64 {
+	log.Infof("*** %d: Starting Lock.", r)
+	n.completedScan.L.Lock()
+	defer n.completedScan.L.Unlock()
+	initalValue := n.scanCount
+	for n.scanCount == initalValue {
+		n.completedScan.Wait()
+	}
+	log.Infof("*** %d: Ending Lock.", r)
+	return n.scanCount
+}
+
 // executeCmd creates a proto.Call struct and sends it via our local sender.
 func (n *nodeServer) executeCmd(args proto.Request, reply proto.Response) error {
 	// TODO(tschottdorf) get a hold of the client's ID, add it to the

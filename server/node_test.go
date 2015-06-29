@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -341,8 +342,8 @@ func compareStoreStatus(t *testing.T, node *Node, expectedNodeStatus *status.Nod
 
 // TestNodeStatus verifies that the store scanner correctly updates the node's
 // status.
-func TestNodeStatus(t *testing.T) {
-	defer leaktest.AfterTest(t)
+func ATestNodeStatus(t *testing.T, r int) {
+	//	defer leaktest.AfterTest(t)
 	ts := &TestServer{}
 	ts.Ctx = NewTestContext()
 	ts.Ctx.ScanInterval = time.Duration(5 * time.Millisecond)
@@ -384,12 +385,16 @@ func TestNodeStatus(t *testing.T) {
 		},
 	}
 
+	fmt.Printf("!!! %d: start\n", r)
+
 	// Always wait twice, to ensure a full scan has occurred.
 	s.WaitForRangeScanCompletion()
 	s.WaitForRangeScanCompletion()
-	ts.node.waitForScanCompletion()
-	ts.node.waitForScanCompletion()
-	oldStats := compareStoreStatus(t, ts.node, expectedNodeStatus, 0)
+	ts.node.waitForScanCompletion2(0 + (r * 100))
+	ts.node.waitForScanCompletion2(0 + (r * 100))
+	oldStats := compareStoreStatus(t, ts.node, expectedNodeStatus, 0+(r*100))
+
+	fmt.Printf("!!! %d: A\n", r)
 
 	// Write some values left and right of the proposed split key.
 	if err := ts.db.Put("a", content); err != nil {
@@ -419,9 +424,11 @@ func TestNodeStatus(t *testing.T) {
 	}
 	s.WaitForRangeScanCompletion()
 	s.WaitForRangeScanCompletion()
-	ts.node.waitForScanCompletion()
-	ts.node.waitForScanCompletion()
-	oldStats = compareStoreStatus(t, ts.node, expectedNodeStatus, 1)
+	ts.node.waitForScanCompletion2(1 + (r * 100))
+	ts.node.waitForScanCompletion2(1 + (r * 100))
+	oldStats = compareStoreStatus(t, ts.node, expectedNodeStatus, 1+(r*100))
+
+	fmt.Printf("!!! %d: B\n", r)
 
 	// Split the range.
 	rng := s.LookupRange(splitKey, nil)
@@ -462,9 +469,11 @@ func TestNodeStatus(t *testing.T) {
 	}
 	s.WaitForRangeScanCompletion()
 	s.WaitForRangeScanCompletion()
-	ts.node.waitForScanCompletion()
-	ts.node.waitForScanCompletion()
-	oldStats = compareStoreStatus(t, ts.node, expectedNodeStatus, 2)
+	ts.node.waitForScanCompletion2(2 + (r * 100))
+	ts.node.waitForScanCompletion2(2 + (r * 100))
+	oldStats = compareStoreStatus(t, ts.node, expectedNodeStatus, 2+(r*100))
+
+	fmt.Printf("!!! %d: C\n", r)
 
 	// Write some values left and right of the proposed split key.
 	if err := ts.db.Put("aa", content); err != nil {
@@ -473,6 +482,8 @@ func TestNodeStatus(t *testing.T) {
 	if err := ts.db.Put("cc", content); err != nil {
 		t.Fatal(err)
 	}
+
+	fmt.Printf("!!! %d: D\n", r)
 
 	expectedNodeStatus = &status.NodeStatus{
 		RangeCount:           2,
@@ -493,8 +504,117 @@ func TestNodeStatus(t *testing.T) {
 		},
 	}
 	s.WaitForRangeScanCompletion()
+	fmt.Printf("!!! %d: E\n", r)
 	s.WaitForRangeScanCompletion()
-	ts.node.waitForScanCompletion()
-	ts.node.waitForScanCompletion()
-	compareStoreStatus(t, ts.node, expectedNodeStatus, 3)
+	fmt.Printf("!!! %d: F\n", r)
+	ts.node.waitForScanCompletion2(3 + (r * 100))
+	fmt.Printf("!!! %d: G\n", r)
+	ts.node.waitForScanCompletion2(3 + (r * 100))
+	fmt.Printf("!!! %d: H\n", r)
+	compareStoreStatus(t, ts.node, expectedNodeStatus, 3+(r*100))
+
+	fmt.Printf("!!! %d: done\n", r)
+}
+
+// TestNodeStatus verifies that the store scanner correctly updates the node's
+// status.
+func BTestNodeStatus(t *testing.T, r int) {
+	//	defer leaktest.AfterTest(t)
+	ts := &TestServer{}
+	ts.Ctx = NewTestContext()
+	ts.Ctx.ScanInterval = time.Duration(5 * time.Millisecond)
+	ts.StoresPerNode = 3
+	if err := ts.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	splitKey := proto.Key("b")
+	content := proto.Key("test content")
+	s, err := ts.node.lSender.GetStore(proto.StoreID(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.WaitForInit()
+	// Perform a read from the range to ensure that the raft election has
+	// completed.  We do not expect an response.
+	if _, err := ts.db.Get("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("!!! %d: start\n", r)
+
+	// Write some values left and right of the proposed split key.
+	if err := ts.db.Put("a", content); err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("!!! %d: A\n", r)
+
+	if err := ts.db.Put("c", content); err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("!!! %d: B\n", r)
+
+	// Split the range.
+	rng := s.LookupRange(splitKey, nil)
+	args := &proto.AdminSplitRequest{
+		RequestHeader: proto.RequestHeader{
+			Key:     proto.KeyMin,
+			RaftID:  rng.Desc().RaftID,
+			Replica: proto.Replica{StoreID: s.Ident.StoreID},
+		},
+		SplitKey: splitKey,
+	}
+	ns := (*nodeServer)(ts.node)
+	reply := &proto.AdminSplitResponse{}
+	if err := ns.AdminSplit(args, reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+
+	fmt.Printf("!!! %d: C\n", r)
+
+	// Write some values left and right of the proposed split key.
+	if err := ts.db.Put("aa", content); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("!!! %d: D\n", r)
+
+	if err := ts.db.Put("cc", content); err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("!!! %d: done\n", r)
+}
+
+func TestNodeStatusMax(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		var j = i
+		go func(l int) {
+			defer wg.Done()
+			ATestNodeStatus(t, l)
+		}(j)
+	}
+	wg.Wait()
+}
+
+func TestNodeStatusMax2(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		var j = i
+		go func(l int) {
+			defer wg.Done()
+			BTestNodeStatus(t, l)
+		}(j)
+	}
+	wg.Wait()
 }
