@@ -750,6 +750,58 @@ func TestRangeGossipConfigUpdates(t *testing.T) {
 	}
 }
 
+// TestRangeGossipConfigUpdatesInTxn verifies that a write
+// in an uncommitted transaction does not trigger gossip.
+func TestRangeGossipConfigUpdatesInTxn(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	tc := testContext{}
+	tc.Start(t)
+	defer tc.Stop()
+
+	// Add a permission for a new key prefix.
+	db1Perm := &proto.PermConfig{
+		Read:  []string{"spencer"},
+		Write: []string{"spencer"},
+	}
+	key := keys.MakeKey(keys.ConfigPermissionPrefix, proto.Key("/db1"))
+	txn := newTransaction("test", key, 1, proto.SERIALIZABLE, tc.clock)
+	data, err := gogoproto.Marshal(db1Perm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &proto.PutRequest{
+		RequestHeader: proto.RequestHeader{
+			Key:       key,
+			Timestamp: txn.Timestamp,
+			Txn:       txn,
+		},
+		Value: proto.Value{Bytes: data},
+	}
+	reply := &proto.PutResponse{}
+	if err := tc.rng.AddCmd(tc.rng.context(), proto.Call{Args: req, Reply: reply}); err != nil {
+		t.Fatal(err)
+	}
+
+	args2, reply2 := endTxnArgs(txn, true /* commit */, 1 /* raftID */, tc.store.StoreID())
+	args2.Timestamp = txn.Timestamp
+	if err := tc.rng.AddCmd(tc.rng.context(), proto.Call{Args: args2, Reply: reply2}); err != nil {
+		t.Error(err)
+	}
+
+	// Information for db1 is not gossiped since the config is updated in a transaction.
+	info, err := tc.gossip.GetInfo(gossip.KeyConfigPermission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configMap := info.(PrefixConfigMap)
+	expConfigs := []*PrefixConfig{
+		{proto.KeyMin, nil, &testDefaultPermConfig},
+	}
+	if !reflect.DeepEqual([]*PrefixConfig(configMap), expConfigs) {
+		t.Errorf("expected gossiped configs to be equal %s vs %s", configMap, expConfigs)
+	}
+}
+
 // getArgs returns a GetRequest and GetResponse pair addressed to
 // the default replica for the specified key.
 func getArgs(key []byte, raftID proto.RaftID, storeID proto.StoreID) (*proto.GetRequest, *proto.GetResponse) {
