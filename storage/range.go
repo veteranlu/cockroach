@@ -978,7 +978,7 @@ func (r *Range) getLeaseForGossip(ctx context.Context) (hasLease bool, err error
 			}
 		}
 	}) {
-		return false, util.Errorf("node is stopping")
+		err = util.Errorf("node is stopping")
 	}
 	return
 }
@@ -1000,7 +1000,7 @@ func (r *Range) maybeGossipFirstRange() error {
 		log.Errorc(ctx, "failed to gossip cluster ID: %s", err)
 	}
 
-	if ok, err := r.getLeaseForGossip(ctx); !ok || err != nil {
+	if ok, err := r.getLeaseForGossip(ctx); !ok {
 		return err
 	}
 	log.Infoc(ctx, "gossiping sentinel from store %d, range %d", r.rm.StoreID(), r.Desc().RaftID)
