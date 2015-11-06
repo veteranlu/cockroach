@@ -18,6 +18,7 @@
 package keys
 
 import (
+	"fmt"
 	"bytes"
 	"reflect"
 	"testing"
@@ -353,5 +354,30 @@ func TestBatchRange(t *testing.T) {
 		if actPair := [2]string{string(rs.Key), string(rs.EndKey)}; !reflect.DeepEqual(actPair, c.exp) {
 			t.Fatalf("%d: expected [%q,%q), got [%q,%q)", i, c.exp[0], c.exp[1], actPair[0], actPair[1])
 		}
+	}
+}
+
+func TestPrettyPrint(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	testCases := []struct {
+		key    roachpb.Key
+		exp 	string
+	}{
+		{RangeTreeNodeKey(roachpb.RKey("a")), ""},
+		{roachpb.Key([]byte("\x00\x00\x00")), ""},
+		{roachpb.Key([]byte("\x00\x00\x00s")), ""},
+		{roachpb.Key([]byte("\x00\x00\x00s11")), ""},
+		{Meta1Prefix, ""},
+		{roachpb.MakeKey(Meta1Prefix, roachpb.RKeyMax), ""},
+		{roachpb.MakeKey(Meta2Prefix, roachpb.RKeyMax), ""},
+		{roachpb.MakeKey(Meta2Prefix, roachpb.RKeyMax.Next()), ""},
+		{RangeDescriptorKey(roachpb.RKey("a")), ""},
+		{MakeTablePrefix(111), ""},
+		{MakeKey(MakeTablePrefix(42), roachpb.RKey("foo")), ""},
+	}
+	for _, test := range testCases {
+		//err := validateRangeMetaKey(test.key)
+		fmt.Println(PrettyPrint(test.key))
+		
 	}
 }

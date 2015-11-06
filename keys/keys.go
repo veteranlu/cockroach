@@ -21,9 +21,11 @@ package keys
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/cockroach/roachpb"
 	"github.com/cockroachdb/cockroach/util"
+	"github.com/cockroachdb/cockroach/sql/parser"
 	"github.com/cockroachdb/cockroach/util/encoding"
 	"github.com/cockroachdb/cockroach/util/log"
 )
@@ -368,4 +370,100 @@ func Range(ba roachpb.BatchRequest) roachpb.RSpan {
 		}
 	}
 	return roachpb.RSpan{Key: from, EndKey: to}
+}
+
+type prefixDictEntry struct {
+	name string
+	prefix roachpb.Key	
+}
+
+// Print the key with more human readable 
+func PrettyPrint(key roachpb.Key) string {
+	
+	prefixDict := []struct {
+		name  string
+		start roachpb.Key
+		end	roachpb.Key
+		entries []prefixDictEntry
+	}{
+		{name: "Local", start: localPrefix, end: LocalMax, entries: []prefixDictEntry{
+			{name: "Store", prefix: roachpb.Key(localStorePrefix)},
+			{name: "RangeID", prefix: roachpb.Key(LocalRangeIDPrefix)},
+			{name: "Range", prefix: LocalRangePrefix},
+		}},
+		{name: "System", start: SystemPrefix, end: SystemMax, entries: []prefixDictEntry{
+			{name: "Meta2", prefix: Meta2Prefix},
+			{name: "Meta1", prefix: Meta1Prefix},
+			{name: "Meta", prefix: MetaPrefix},
+			{name: "StatusStore", prefix: StatusStorePrefix},
+			{name: "StatusNode", prefix: StatusNodePrefix},
+			{name: "Status", prefix: StatusPrefix},
+		}},
+		{name: "User", start: TableDataPrefix, end: nil, entries: []prefixDictEntry{
+			{name: "TableData", prefix: TableDataPrefix},
+		}},
+	}
+
+	var buf bytes.Buffer
+	for _, p := range prefixDict {
+		if p.end != nil && (key.Compare(p.start) < 0 || key.Compare(p.end) >=0) {
+			continue
+		} 
+		fmt.Fprintf(&buf, "/%s", p.name)
+		
+		for _, e := range p.entries {
+			if !bytes.HasPrefix(key, e.prefix) {
+				continue
+			}
+	
+			fmt.Fprintf(&buf, "/%s", e.name)
+			key = key[len(e.prefix):]
+			for k := 0; len(key) > 0; k++ {
+				var d interface{}
+				var err error
+				switch encoding.PeekType(key) {
+				case encoding.Null:
+					key, _ = encoding.DecodeIfNull(key)
+					d = parser.DNull
+				case encoding.NotNull:
+					key, _ = encoding.DecodeIfNotNull(key)
+					d = "#"
+				case encoding.Int:
+					var i int64
+					key, i, err = encoding.DecodeVarint(key)
+					d = parser.DInt(i)
+				case encoding.Float:
+					var f float64
+					key, f, err = encoding.DecodeFloat(key, nil)
+					d = parser.DFloat(f)
+				case encoding.Bytes:
+					var s string
+					key, s, err = encoding.DecodeString(key, nil)
+					d = parser.DString(s)
+				case encoding.Time:
+					var t time.Time
+					key, t, err = encoding.DecodeTime(key)
+					d = parser.DTimestamp{Time: t}
+				default:
+					// This shouldn't ever happen, but if it does let the loop exit.
+					d = key.String()
+					key = nil
+				}
+				
+				if err != nil {
+					fmt.Fprintf(&buf, "/<%v>", err)
+					continue
+				}
+				fmt.Fprintf(&buf, "/%s", d)
+				
+			}
+			return buf.String()
+		}
+
+		if len(key) > 0 {
+			fmt.Fprintf(&buf, "/%s", key.String())
+			return buf.String()
+		}
+	}
+	return key.String()
 }
