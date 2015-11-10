@@ -19,6 +19,8 @@
 package kv
 
 import (
+	"math/rand"
+	"time"
 	"github.com/cockroachdb/cockroach/gossip"
 	"github.com/cockroachdb/cockroach/roachpb"
 	"github.com/cockroachdb/cockroach/util/log"
@@ -116,6 +118,13 @@ func (rs replicaSlice) SortByCommonAttributePrefix(attrs []string) int {
 		}
 		if firstNotOrdered == 0 {
 			return bucket
+		} else if firstNotOrdered > 1 {
+			var randPos int
+			Rand := rand.New(rand.NewSource(time.Now().UnixNano()))
+			for idx := 0; idx < firstNotOrdered-1; idx++ {
+				randPos = idx + Rand.Intn(firstNotOrdered) % (firstNotOrdered-1)
+				rs.Swap(randPos, idx)
+			}
 		}
 		topIndex = firstNotOrdered - 1
 	}

@@ -20,8 +20,10 @@ package kv
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cockroach/roachpb"
+	"github.com/cockroachdb/cockroach/util"
 	"github.com/cockroachdb/cockroach/util/leaktest"
 )
 
@@ -78,6 +80,46 @@ func TestReplicaSetSortByCommonAttributePrefix(t *testing.T) {
 		if !verifyOrdering(attr, rs, prefixLen) {
 			t.Errorf("%d: attributes not ordered by %s or prefix length %d incorrect:\n%v", i, attr, prefixLen, rs)
 		}
+	}
+	
+	randSortAttrs := [][]string{
+		{"us-west-1a", "pdu1", "fio"},
+		{"us-west-1a"},
+		{"us-east-1a"},
+	}
+	
+	for _, attr := range randSortAttrs {
+		rs := replicaSlice{}
+		for _, c := range replicaAttrs {
+			rs = append(rs, replicaInfo{
+				NodeDesc: &roachpb.NodeDescriptor{
+					Attrs: roachpb.Attributes{Attrs: c},
+				},
+			})
+		}
+		rs.SortByCommonAttributePrefix(attr)
+		util.SucceedsWithin(t, 500 * time.Millisecond, func() error {
+			otherRs := replicaSlice{}
+			for _, c := range replicaAttrs {
+				otherRs = append(otherRs, replicaInfo{
+					NodeDesc: &roachpb.NodeDescriptor{
+						Attrs: roachpb.Attributes{Attrs: c},
+					},
+				})
+			}
+			otherRs.SortByCommonAttributePrefix(attr)
+			for i:=0; i<len(rs); i++ {
+				if len(rs[i].attrs())!= len(otherRs[i].attrs()) {
+					return nil
+				}
+				for j:=0; j<len(rs[i].attrs()); j++ {
+					if rs[i].attrs()[j] != otherRs[i].attrs()[j] {
+						return nil
+					}
+				}
+			}
+			return util.Errorf("wait commands not enough")
+		})
 	}
 }
 
