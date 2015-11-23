@@ -19,6 +19,7 @@
 package server
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 const (
 	raftServiceName = "MultiRaft"
 	raftMessageName = raftServiceName + ".RaftMessage"
+	batchRaftMessageName = raftServiceName + ".BatchRaftMessage"
 	// Outgoing messages are queued on a per-node basis on a channel of
 	// this size.
 	raftSendBufferSize = 500
@@ -70,6 +72,11 @@ func newRPCTransport(gossip *gossip.Gossip, rpcServer *rpc.Server, rpcContext *r
 			t.RaftMessage, &multiraft.RaftMessageRequest{}); err != nil {
 			return nil, err
 		}
+		
+		if err := t.rpcServer.RegisterAsync(batchRaftMessageName, false, /*not public*/
+			t.BatchRaftMessage, &multiraft.BatchRaftMessageRequest{}); err != nil {
+			return nil, err
+		}
 	}
 
 	return t, nil
@@ -97,6 +104,39 @@ func (t *rpcTransport) RaftMessage(args proto.Message, callback func(proto.Messa
 	// order of incoming messages.
 	resp, err := server.RaftMessage(req)
 	callback(resp, err)
+}
+
+// RaftMessage proxies the incoming request to the listening server interface.
+func (t *rpcTransport) BatchRaftMessage(args proto.Message, callback func(proto.Message, error)) {
+	batchReq := args.(*multiraft.BatchRaftMessageRequest)
+
+	var errStr string
+	for _, req := range batchReq.Requests {
+		t.mu.Lock()
+		server, ok := t.servers[req.ToReplica.StoreID]
+		t.mu.Unlock()
+	
+		if !ok {
+			errStr += fmt.Sprintf("Unable to proxy message to node: %d", req.Message.To)
+			continue
+		}
+	
+		// Raft responses are empty so we don't actually need to convert
+		// between multiraft's internal struct and the external proto
+		// representation. In fact, we don't even need to wait for the
+		// message to be processed to invoke the callback. We are just
+		// (ab)using the async handler mechanism to get this (synchronous)
+		// handler called in the RPC server's goroutine so we can preserve
+		// order of incoming messages.
+		if _, err := server.RaftMessage(req); err != nil {
+			errStr += err.String()
+		}
+	}
+	
+	if len(errStr) != 0 {
+		callback(&multiraft.BatchRaftMessageResponse{}, err)
+	}
+	
 }
 
 // Listen implements the multiraft.Transport interface by registering a ServerInterface

@@ -47,6 +47,16 @@ message RaftMessageRequest {
 message RaftMessageResponse {
 }
 
+// BatchRaftMessageRequest is the request use to batch small size of RaftMessageRequests, 
+// in order to improve network transport performance.
+message BatchRaftMessageRequest {
+	optional RaftMessageRequest requests = 1;
+}
+
+// BatchRaftMessageResponse is an empty message returned by raft RPCs.
+message BatchRaftMessageResponse {
+}
+
 // ConfChangeContext is encoded in the raftpb.ConfChange.Context field.
 message ConfChangeContext {
   optional string command_id = 1 [(gogoproto.nullable) = false,
