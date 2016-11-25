@@ -1,0 +1,5 @@
+statement error pq: unimplemented
+WITH a AS (SELECT 1) SELECT *
+
+statement error pq: unimplemented
+ALTER TABLE foo RENAME CONSTRAINT x TO y

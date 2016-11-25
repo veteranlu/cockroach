@@ -4,57 +4,79 @@ by Spencer Kimball from early 2014.
 
 # Overview
 
-Cockroach is a distributed key:value datastore (SQL and structured
-data layers of cockroach have yet to be defined) which supports **ACID
-transactional semantics** and **versioned values** as first-class
-features. The primary design goal is **global consistency and
-survivability**, hence the name. Cockroach aims to tolerate disk,
-machine, rack, and even **datacenter failures** with minimal latency
-disruption and **no manual intervention**. Cockroach nodes are
-symmetric; a design goal is **homogenous deployment** (one binary) with
-minimal configuration.
+CockroachDB is a distributed SQL database. The primary design goals
+are **scalability**, **strong consistency** and **survivability**
+(hence the name). CockroachDB aims to tolerate disk, machine, rack, and
+even **datacenter failures** with minimal latency disruption and **no
+manual intervention**. CockroachDB nodes are symmetric; a design goal is
+**homogeneous deployment** (one binary) with minimal configuration and
+no required external dependencies.
 
-Cockroach implements a **single, monolithic sorted map** from key to
-value where both keys and values are byte strings (not unicode).
-Cockroach **scales linearly** (theoretically up to 4 exabytes (4E) of
-logical data). The map is composed of one or more ranges and each range
-is backed by data stored in [RocksDB](http://rocksdb.org/) (a
-variant of LevelDB), and is replicated to a total of three or more
-cockroach servers. Ranges are defined by start and end keys. Ranges are
-merged and split to maintain total byte size within a globally
-configurable min/max size interval. Range sizes default to target `64M` in
-order to facilitate quick splits and merges and to distribute load at
-hotspots within a key range. Range replicas are intended to be located
-in disparate datacenters for survivability (e.g. `{ US-East, US-West,
-Japan }`, `{ Ireland, US-East, US-West}`, `{ Ireland, US-East, US-West,
-Japan, Australia }`).
+The entry point for database clients is the SQL interface. Every node
+in a CockroachDB cluster can act as a client SQL gateway. A SQL
+gateway transforms and executes client SQL statements to key-value
+(KV) operations, which the gateway distributes across the cluster as
+necessary and returns results to the client. CockroachDB implements a
+**single, monolithic sorted map** from key to value where both keys
+and values are byte strings.
 
-Single mutations to ranges are mediated via an instance of a distributed
-consensus algorithm to ensure consistency. We’ve chosen to use the
-[Raft consensus algorithm](https://raftconsensus.github.io); all consensus
-state is stored in RocksDB.
+The KV map is logically composed of smaller segments of the keyspace
+called ranges. Each range is backed by data stored in a local KV
+storage engine (we use [RocksDB](http://rocksdb.org/), a variant of
+LevelDB). Range data is replicated to a configurable number of
+additional CockroachDB nodes. Ranges are merged and split to maintain
+a target size, by default `64M`. The relatively small size facilitates
+quick repair and rebalancing to address node failures, new capacity
+and even read/write load. However, the size must be balanced against
+the pressure on the system from having more ranges to manage.
 
-A single logical mutation may affect multiple key/value pairs. Logical
-mutations have ACID transactional semantics. If all keys affected by a
-logical mutation fall within the same range, atomicity and consistency
-are guaranteed by Raft; this is the **fast commit path**. Otherwise, a
-**non-locking distributed commit** protocol is employed between affected
-ranges.
+CockroachDB achieves horizontally scalability:
+- adding more nodes increases the capacity of the cluster by the
+  amount of storage on each node (divided by a configurable
+  replication factor), theoretically up to 4 exabytes (4E) of logical
+  data;
+- client queries can be sent to any node in the cluster, and queries
+  can operate independently (w/o conflicts), meaning that overall
+  throughput is a linear factor of the number of nodes in the cluster.
+- queries are distributed (ref: distributed SQL) so that the overall
+  throughput of single queries can be increased by adding more nodes.
 
-Cockroach provides [snapshot isolation](http://en.wikipedia.org/wiki/Snapshot_isolation) (SI) and
+CockroachDB achieves strong consistency:
+- uses a distributed consensus protocol for synchronous replication of
+  data in each key value range. We’ve chosen to use the [Raft
+  consensus algorithm](https://raftconsensus.github.io); all consensus
+  state is stored in RocksDB.
+- single or batched mutations to a single range are mediated via the
+  range's Raft instance. Raft guarantees ACID semantics.
+- logical mutations which affect multiple ranges employ distributed
+  transactions for ACID semantics. CockroachDB uses an efficient
+  **non-locking distributed commit** protocol.
+
+CockroachDB achieves survivability:
+- range replicas can be co-located within a single datacenter for low
+  latency replication and survive disk or machine failures. They can
+  be distributed across racks to survive some network switch failures.
+- range replicas can be located in datacenters spanning increasingly
+  disparate geographies to survive ever-greater failure scenarios from
+  datacenter power or networking loss to regional power failures
+  (e.g. `{ US-East-1a, US-East-1b, US-East-1c }`, `{ US-East, US-West,
+  Japan }`, `{ Ireland, US-East, US-West}`, `{ Ireland, US-East,
+  US-West, Japan, Australia }`).
+
+CockroachDB provides [snapshot isolation](http://en.wikipedia.org/wiki/Snapshot_isolation) (SI) and
 serializable snapshot isolation (SSI) semantics, allowing **externally
 consistent, lock-free reads and writes**--both from a historical
 snapshot timestamp and from the current wall clock time. SI provides
 lock-free reads and writes but still allows write skew. SSI eliminates
 write skew, but introduces a performance hit in the case of a
 contentious system. SSI is the default isolation; clients must
-consciously decide to trade correctness for performance. Cockroach
+consciously decide to trade correctness for performance. CockroachDB
 implements [a limited form of linearizability](#linearizability),
 providing ordering for any observer or chain of observers.
 
 Similar to
 [Spanner](http://static.googleusercontent.com/media/research.google.com/en/us/archive/spanner-osdi2012.pdf)
-directories, Cockroach allows configuration of arbitrary zones of data.
+directories, CockroachDB allows configuration of arbitrary zones of data.
 This allows replication factor, storage device type, and/or datacenter
 location to be chosen to optimize performance and/or availability.
 Unlike Spanner, zones are monolithic and don’t allow movement of fine
@@ -62,11 +84,11 @@ grained data on the level of entity groups.
 
 # Architecture
 
-Cockroach implements a layered architecture. The highest level of
+CockroachDB implements a layered architecture. The highest level of
 abstraction is the SQL layer (currently unspecified in this document).
-It depends directly on the [*structured data
-API*](#structured-data-api), which provides familiar relational concepts
-such as schemas, tables, columns, and indexes. The structured data API
+It depends directly on the [*SQL layer*](#sql),
+which provides familiar relational concepts
+such as schemas, tables, columns, and indexes. The SQL layer
 in turn depends on the [distributed key value store](#key-value-api),
 which handles the details of range addressing to provide the abstraction
 of a single, monolithic key value store. The distributed KV store
@@ -83,9 +105,12 @@ raft. The color coding shows associated range replicas.
 
 ![Ranges](media/ranges.png)
 
-Each physical node exports a RoachNode service. Each RoachNode exports
-one or more key ranges. RoachNodes are symmetric. Each has the same
-binary and assumes identical roles.
+Each physical node exports two RPC-based key value APIs: one for
+external clients and one for internal clients (exposing sensitive
+operational features). Both services accept batches of requests and
+return batches of responses. Nodes are symmetric in capabilities and
+exported interfaces; each has the same binary and may assume any
+role.
 
 Nodes and the ranges they provide access to can be arranged with various
 physical network topologies to make trade offs between reliability and
@@ -99,22 +124,42 @@ each replica located on different:
 
 Up to `F` failures can be tolerated, where the total number of replicas `N = 2F + 1` (e.g. with 3x replication, one failure can be tolerated; with 5x replication, two failures, and so on).
 
-# Cockroach Client
-
-In order to support diverse client usage, Cockroach clients connect to
-any node via HTTPS using protocol buffers or JSON. The connected node
-proxies involved client work including key lookups and write buffering.
-
 # Keys
 
-Cockroach keys are arbitrary byte arrays. If textual data is used in
-keys, utf8 encoding is recommended (this helps for cleaner display of
-values in debugging tools). User-supplied keys are encoded using an
-ordered code. System keys are either prefixed with null characters (`\0`
-or `\0\0`) for system tables, or take the form of
-`<user-key><system-suffix>` to sort user-key-range specific system
-keys immediately after the user keys they refer to. Null characters are
-used in system key prefixes to guarantee that they sort first.
+Cockroach keys are arbitrary byte arrays. Keys come in two flavors:
+system keys and table data keys. System keys are used by Cockroach for
+internal data structures and metadata. Table data keys contain SQL
+table data (as well as index data). System and table data keys are
+prefixed in such a way that all system keys sort before any table data
+keys.
+
+System keys come in several subtypes:
+
+- **Global** keys store cluster-wide data such as the "meta1" and
+    "meta2" keys as well as various other system-wide keys such as the
+    node and store ID allocators.
+- **Store local** keys are used for unreplicated store metadata
+    (e.g. the `StoreIdent` structure). "Unreplicated" indicates that
+    these values are not replicated across multiple stores because the
+    data they hold is tied to the lifetime of the store they are
+    present on.
+- **Range local** keys store range metadata that is associated with a
+    global key. Range local keys have a special prefix followed by a
+    global key and a special suffix. For example, transaction records
+    are range local keys which look like:
+    `\x01k<global-key>txn-<txnID>`.
+- **Replicated Range ID local** keys store range metadata that is
+    present on all of the replicas for a range. These keys are updated
+    via Raft operations. Examples include the range lease state and
+    abort cache entries.
+- **Unreplicated Range ID local** keys store range metadata that is
+    local to a replica. The primary examples of such keys are the Raft
+    state and Raft log.
+
+Table data keys are used to store all SQL data. Table data keys
+contain internal structure as described in the section on [mapping
+data between the SQL model and
+KV](#data-mapping-between-the-sql-model-and-kv).
 
 # Versioned Values
 
@@ -128,14 +173,6 @@ minimum expiration.
 
 Versioned values are supported via modifications to RocksDB to record
 commit timestamps and GC expirations per key.
-
-Each range maintains a small (i.e. latest 10s of read timestamps),
-*in-memory* cache from key to the latest timestamp at which the
-key was read. This *read timestamp cache* is updated everytime a key
-is read. The cache’s entries are evicted oldest timestamp first, updating
-the low water mark of the cache appropriately. If a new range replica leader
-is elected, it sets the low water mark for the cache to the current
-wall time + ε (ε = 99th percentile clock skew).
 
 # Lock-Free Distributed Transactions
 
@@ -167,6 +204,17 @@ For a discussion of SSI implemented by preventing read-write conflicts
 the [Yabandeh paper](https://drive.google.com/file/d/0B9GCVTp_FHJIMjJ2U2t6aGpHLTFUVHFnMTRUbnBwc2pLa1RN/edit?usp=sharing),
 which is the source of much inspiration for Cockroach’s SSI.
 
+Both SI and SSI require that the outcome of reads must be preserved, i.e.
+a write of a key at a lower timestamp than a previous read must not succeed. To
+this end, each range maintains a bounded *in-memory* cache from key range to
+the latest timestamp at which it was read.
+
+Most updates to this *timestamp cache* correspond to keys being read, though
+the timestamp cache also protects the outcome of some writes (notably range
+deletions) which consequently must also populate the cache. The cache’s entries
+are evicted oldest timestamp first, updating the low water mark of the cache
+appropriately.
+
 Each Cockroach transaction is assigned a random priority and a
 "candidate timestamp" at start. The candidate timestamp is the
 provisional timestamp at which the transaction will commit, and is
@@ -195,12 +243,12 @@ with the event by the sender, and when events are sent a timestamp generated by
 the local HLC is attached.
 
 For a more in depth description of HLC please read the paper. Our
-implementation is [here](https://github.com/cockroachdb/cockroach/blob/master/util/hlc/hlc.go).
+implementation is [here](https://github.com/cockroachdb/cockroach/blob/master/pkg/util/hlc/hlc.go).
 
 Cockroach picks a Timestamp for a transaction using HLC time. Throughout this
 document, *timestamp* always refers to the HLC time which is a singleton
 on each node. The HLC is updated by every read/write event on the node, and
-the HLC time >= walltime. A read/write timestamp received in a cockroach request
+the HLC time >= wall time. A read/write timestamp received in a cockroach request
 from another node is not only used to version the operation, but also updates
 the HLC on the node. This is useful in guaranteeing that all data read/written
 on a node is at a timestamp < next HLC time.
@@ -209,27 +257,27 @@ on a node is at a timestamp < next HLC time.
 
 Transactions are executed in two phases:
 
-1. Start the transaction by writing a new entry to the system
-   transaction table (keys prefixed by *\0tx*) with state “PENDING”. In
+1. Start the transaction by selecting a range which is likely to be
+   heavily involved in the transaction and writing a new transaction
+   record to a reserved area of that range with state "PENDING". In
    parallel write an "intent" value for each datum being written as part
    of the transaction. These are normal MVCC values, with the addition of
    a special flag (i.e. “intent”) indicating that the value may be
    committed after the transaction itself commits. In addition,
-   the transaction id (unique and chosen at tx start time by client)
-   is stored with intent values. The tx id is used to refer to the
-   transaction table when there are conflicts and to make
+   the transaction id (unique and chosen at txn start time by client)
+   is stored with intent values. The txn id is used to refer to the
+   transaction record when there are conflicts and to make
    tie-breaking decisions on ordering between identical timestamps.
    Each node returns the timestamp used for the write (which is the
    original candidate timestamp in the absence of read/write conflicts);
    the client selects the maximum from amongst all write timestamps as the
    final commit timestamp.
 
-2. Commit the transaction by updating its entry in the system
-   transaction table (keys prefixed by *\0tx*). The value of the
-   commit entry contains the candidate timestamp (increased as
-   necessary to accommodate any latest read timestamps). Note that
-   the transaction is considered fully committed at this point and
-   control may be returned to the client.
+2. Commit the transaction by updating its transaction record. The value
+   of the commit entry contains the candidate timestamp (increased as
+   necessary to accommodate any latest read timestamps). Note that the
+   transaction is considered fully committed at this point and control
+   may be returned to the client.
 
    In the case of an SI transaction, a commit timestamp which was
    increased to accommodate concurrent readers is perfectly
@@ -267,7 +315,7 @@ encounter data that necessitate conflict resolution
 
 When a transaction restarts, it changes its priority and/or moves its
 timestamp forward depending on data tied to the conflict, and
-begins anew reusing the same tx id. The prior run of the transaction might
+begins anew reusing the same txn id. The prior run of the transaction might
 have written some write intents, which need to be deleted before the
 transaction commits, so as to not be included as part of the transaction.
 These stale write intent deletions are done during the reexecution of the
@@ -281,12 +329,12 @@ a NOOP.
 ***Transaction abort:***
 
 This is the case in which a transaction, upon reading its transaction
-table entry, finds that it has been aborted. In this case, the
-transaction can not reuse its intents; it returns control to the client
-before cleaning them up (other readers and writers would clean up
-dangling intents as they encounter them) but will make an effort to
-clean up after itself. The next attempt (if applicable) then runs as a
-new transaction with **a new tx id**.
+record, finds that it has been aborted. In this case, the transaction
+can not reuse its intents; it returns control to the client before
+cleaning them up (other readers and writers would clean up dangling
+intents as they encounter them) but will make an effort to clean up
+after itself. The next attempt (if applicable) then runs as a new
+transaction with **a new txn id**.
 
 ***Transaction interactions:***
 
@@ -313,7 +361,7 @@ There are several scenarios in which transactions interact:
   stamp" below.
 
 - **Reader encounters write intent with older timestamp**: the reader
-  must follow the intent’s transaction id to the transaction table.
+  must follow the intent’s transaction id to the transaction record.
   If the transaction has already been committed, then the reader can
   just read the value. If the write transaction has not yet been
   committed, then the reader has two options. If the write conflict
@@ -363,9 +411,9 @@ are upgraded to committed. In the event a transaction is aborted, all written
 intents are deleted. The client proxy doesn’t guarantee it will resolve intents.
 
 In the event the client proxy restarts before the pending transaction is
-committed, the dangling transaction would continue to live in the
-transaction table until aborted by another transaction. Transactions
-heartbeat the transaction table every five seconds by default.
+committed, the dangling transaction would continue to "live" until
+aborted by another transaction. Transactions periodically heartbeat
+their transaction record to maintain liveness.
 Transactions encountered by readers or writers with dangling intents
 which haven’t been heartbeat within the required interval are aborted.
 In the event the proxy restarts after a transaction commits but before
@@ -377,9 +425,9 @@ An exploration of retries with contention and abort times with abandoned
 transaction is
 [here](https://docs.google.com/document/d/1kBCu4sdGAnvLqpT-_2vaTbomNmX3_saayWEGYu1j7mQ/edit?usp=sharing).
 
-**Transaction Table**
+**Transaction Records**
 
-Please see [roachpb/data.proto](https://github.com/cockroachdb/cockroach/blob/master/roachpb/data.proto) for the up-to-date structures, the best entry point being `message Transaction`.
+Please see [pkg/roachpb/data.proto](https://github.com/cockroachdb/cockroach/blob/master/pkg/roachpb/data.proto) for the up-to-date structures, the best entry point being `message Transaction`.
 
 **Pros**
 
@@ -389,7 +437,7 @@ Please see [roachpb/data.proto](https://github.com/cockroachdb/cockroach/blob/ma
   abort.
 - Lower latency than traditional 2PC commit protocol (w/o contention)
   because second phase requires only a single write to the
-  transaction table instead of a synchronous round to all
+  transaction record instead of a synchronous round to all
   transaction participants.
 - Priorities avoid starvation for arbitrarily long transactions and
   always pick a winner from between contending transactions (no
@@ -404,8 +452,8 @@ Please see [roachpb/data.proto](https://github.com/cockroachdb/cockroach/blob/ma
 
 **Cons**
 
-- Reads from non-leader replicas still require a ping to the leader to
-  update *read timestamp cache*.
+- Reads from non-lease holder replicas still require a ping to the lease holder
+  to update the *read timestamp cache*.
 - Abandoned transactions may block contending writers for up to the
   heartbeat interval, though average wait is likely to be
   considerably shorter (see [graph in link](https://docs.google.com/document/d/1kBCu4sdGAnvLqpT-_2vaTbomNmX3_saayWEGYu1j7mQ/edit?usp=sharing)).
@@ -471,168 +519,106 @@ potentially limiting. Cockroach could also potentially use a global
 clock (Google did this with [Percolator](https://www.usenix.org/legacy/event/osdi10/tech/full_papers/Peng.pdf)),
 which would be feasible for smaller, geographically-proximate clusters.
 
-# Linearizability
+# Strict Serializability (Linearizability)
 
-First a word about [***Spanner***](http://research.google.com/archive/spanner.html).
-By combining judicious use of wait intervals with accurate time signals,
-Spanner provides a global ordering between any two non-overlapping transactions
-(in absolute time) with \~14ms latencies. Put another way:
-Spanner guarantees that if a transaction T<sub>1</sub> commits (in absolute time)
-before another transaction T<sub>2</sub> starts, then T<sub>1</sub>'s assigned commit
-timestamp is smaller than T<sub>2</sub>'s. Using atomic clocks and GPS receivers,
-Spanner reduces their clock skew uncertainty to \< 10ms (`ε`). To make
-good on the promised guarantee, transactions must take at least double
-the clock skew uncertainty interval to commit (`2ε`). See [*this
-article*](http://www.cs.cornell.edu/~ie53/publications/DC-col51-Sep13.pdf)
-for a helpful overview of Spanner’s concurrency control.
+Roughly speaking, the gap between <i>strict serializability</i> (which we use
+interchangeably with <i>linearizability</i>) and CockroachDB's default
+isolation level (<i>serializable</i>) is that with linearizable transactions,
+causality is preserved. That is, if one transaction (say, creating a posting
+for a user) waits for its predecessor (creating the user in the first place)
+to complete, one would hope that the logical timestamp assigned to the former
+is larger than that of the latter.
+In practice, in distributed databases this may not hold, the reason typically
+being that clocks across a distributed system are not perfectly synchronized
+and the "later" transaction touches a part disjoint from that on which the
+first transaction ran, resulting in clocks with disjoint information to decide
+on the commit timestamps.
 
-Cockroach could make the same guarantees without specialized hardware,
-at the expense of longer wait times. If servers in the cluster were
-configured to work only with NTP, transaction wait times would likely to
-be in excess of 150ms. For wide-area zones, this would be somewhat
-mitigated by overlap from cross datacenter link latencies. If clocks
-were made more accurate, the minimal limit for commit latencies would
-improve.
+In practice, in CockroachDB many transactional workloads are actually
+linearizable, though the precise conditions are too involved to outline them
+here.
 
-However, let’s take a step back and evaluate whether Spanner’s external
-consistency guarantee is worth the automatic commit wait. First, if the
-commit wait is omitted completely, the system still yields a consistent
-view of the map at an arbitrary timestamp. However with clock skew, it
-would become possible for commit timestamps on non-overlapping but
-causally related transactions to suffer temporal reverse. In other
-words, the following scenario is possible for a client without global
-ordering:
+Causality is typically not required for many transactions, and so it is
+advantageous to pay for it only when it *is* needed. CockroachDB implements
+this via <i>causality tokens</i>: When committing a transaction, a causality
+token can be retrieved and passed to the next transaction, ensuring that these
+two transactions get assigned increasing logical timestamps.
 
--   Start transaction T<sub>1</sub> to modify value `x` with commit time s<sub>1</sub>
+Additionally, as better synchronized clocks become a standard commodity offered
+by cloud providers, CockroachDB can provide global linearizability by doing
+much the same that [Google's
+Spanner](http://research.google.com/archive/spanner.html) does: wait out the
+maximum clock offset after committing, but before returning to the client.
 
--   On commit of T<sub>1</sub>, start T<sub>2</sub> to modify value `y` with commit time
-    s<sub>2</sub>
+See the blog post below for much more in-depth information.
 
--   Read `x` and `y` and discover that s<sub>1</sub> \> s<sub>2</sub> (**!**)
-
-The external consistency which Spanner guarantees is referred to as
-**linearizability**. It goes beyond serializability by preserving
-information about the causality inherent in how external processes
-interacted with the database. The strength of Spanner’s guarantee can be
-formulated as follows: any two processes, with clock skew within
-expected bounds, may independently record their wall times for the
-completion of transaction T<sub>1</sub> (T<sub>1</sub><sup>end</sup>) and start of transaction
-T<sub>2</sub> (T<sub>2</sub><sup>start</sup>) respectively, and if later
-compared such that T<sub>1</sub><sup>end</sup> \< T<sub>2</sub><sup>start</sup>,
-then commit timestamps s<sub>1</sub> \< s<sub>2</sub>.
-This guarantee is broad enough to completely cover all cases of explicit
-causality, in addition to covering any and all imaginable scenarios of implicit
-causality.
-
-Our contention is that causality is chiefly important from the
-perspective of a single client or a chain of successive clients (*if a
-tree falls in the forest and nobody hears…*). As such, Cockroach
-provides two mechanisms to provide linearizability for the vast majority
-of use cases without a mandatory transaction commit wait or an elaborate
-system to minimize clock skew.
-
-1. Clients provide the highest transaction commit timestamp with
-   successive transactions. This allows node clocks from previous
-   transactions to effectively participate in the formulation of the
-   commit timestamp for the current transaction. This guarantees
-   linearizability for transactions committed by this client.
-
-   Newly launched clients wait at least 2 \* ε from process start
-   time before beginning their first transaction. This preserves the
-   same property even on client restart, and the wait will be
-   mitigated by process initialization.
-
-   All causally-related events within Cockroach maintain
-   linearizability.
-
-2. Committed transactions respond with a commit wait parameter which
-   represents the remaining time in the nominal commit wait. This
-   will typically be less than the full commit wait as the consensus
-   write at the coordinator accounts for a portion of it.
-
-   Clients taking any action outside of another Cockroach transaction
-   (e.g. writing to another distributed system component) can either
-   choose to wait the remaining interval before proceeding, or
-   alternatively, pass the wait and/or commit timestamp to the
-   execution of the outside action for its consideration. This pushes
-   the burden of linearizability to clients, but is a useful tool in
-   mitigating commit latencies if the clock skew is potentially
-   large. This functionality can be used for ordering in the face of
-   backchannel dependencies as mentioned in the
-   [AugmentedTime](http://www.cse.buffalo.edu/~demirbas/publications/augmentedTime.pdf)
-   paper.
-
-Using these mechanisms in place of commit wait, Cockroach’s guarantee can be
-formulated as follows: any process which signals the start of transaction
-T<sub>2</sub> (T<sub>2</sub><sup>start</sup>) after the completion of
-transaction T<sub>1</sub> (T<sub>1</sub><sup>end</sup>), will have commit
-timestamps such thats<sub>1</sub> \< s<sub>2</sub>.
+https://www.cockroachlabs.com/blog/living-without-atomic-clocks/
 
 # Logical Map Content
 
-Logically, the map contains a series of reserved system key / value
-pairs covering accounting, range metadata, node accounting and
-permissions before the actual key / value pairs for non-system data
-(e.g. the actual meat of the map).
+Logically, the map contains a series of reserved system key/value
+pairs preceding the actual user data (which is managed by the SQL
+subsystem).
 
-- `\0\0meta1` Range metadata for location of `\0\0meta2`.
-- `\0\0meta1<key1>` Range metadata for location of `\0\0meta2<key1>`.
+- `\x02<key1>`: Range metadata for range ending `\x03<key1>`. This a "meta1" key.
 - ...
-- `\0\0meta1<keyN>`: Range metadata for location of `\0\0meta2<keyN>`.
-- `\0\0meta2`: Range metadata for location of first non-range metadata key.
-- `\0\0meta2<key1>`: Range metadata for location of `<key1>`.
+- `\x02<keyN>`: Range metadata for range ending `\x03<keyN>`. This a "meta1" key.
+- `\x03<key1>`: Range metadata for range ending `<key1>`. This a "meta2" key.
 - ...
-- `\0\0meta2<keyN>`: Range metadata for location of `<keyN>`.
-- `\0acct<key0>`: Accounting for key prefix key0.
-- ...
-- `\0acct<keyN>`: Accounting for key prefix keyN.
-- `\0node<node-address0>`: Accounting data for node 0.
-- ...
-- `\0node<node-addressN>`: Accounting data for node N.
-- `\0perm<key0><user0>`: Permissions for user0 for key prefix key0.
-- ...
-- `\0perm<keyN><userN>`: Permissions for userN for key prefix keyN.
-- `\0tree_root`: Range key for root of range-spanning tree.
-- `\0tx<tx-id0>`: Transaction record for transaction 0.
-- ...
-- `\0tx<tx-idN>`: Transaction record for transaction N.
-- `\0zone<key0>`: Zone information for key prefix key0.
-- ...
-- `\0zone<keyN>`: Zone information for key prefix keyN.
-- `<>acctd<metric0>`: Accounting data for Metric 0 for empty key prefix.
-- ...
-- `<>acctd<metricN>`: Accounting data for Metric N for empty key prefix.
-- `<key0>`: `<value0>` The first user data key.**
-- ...
-- `<keyN>`: `<valueN>` The last user data key.**
+- `\x03<keyN>`: Range metadata for range ending `<keyN>`. This a "meta2" key.
+- `\x04{desc,node,range,store}-idegen`: ID generation oracles for various component types.
+- `\x04status-node-<varint encoded Store ID>`: Store runtime metadata.
+- `\x04tsd<key>`: Time-series data key.
+- `<key>`: A user key. In practice, these keys are managed by the SQL
+  subsystem, which employs its own key anatomy.
 
-There are some additional system entries sprinkled amongst the
-non-system keys. See the Key-Prefix Accounting section in this document
-for further details.
+# Stores and Storage
 
-# Node Storage
+Nodes contain one or more stores. Each store should be placed on a unique disk.
+Internally, each store contains a single instance of RocksDB with a block cache
+shared amongst all of the stores in a node. And these stores in turn have
+a collection of range replicas. More than one replica for a range will never
+be placed on the same store or even the same node.
 
-Nodes maintain a separate instance of RocksDB for each disk. Each
-RocksDB instance hosts any number of ranges. RPCs arriving at a
-RoachNode are multiplexed based on the disk name to the appropriate
-RocksDB instance. A single instance per disk is used to avoid
-contention. If every range maintained its own RocksDB, global management
-of available cache memory would be impossible and writers for each range
-would compete for non-contiguous writes to multiple RocksDB logs.
+Early on, when a cluster is first initialized, the few default starting ranges
+will only have a single replica, but as soon as other nodes are available they
+will replicate to them until they've reached their desired replication factor,
+the default being 3.
 
-In addition to the key/value pairs of the range itself, various range
-metadata is maintained.
+Zone configs can be used to control a range's replication factor and add
+constraints as to where the range's replicas can be located. When there is a
+change in a range's zone config, the range will up or down replicate to the
+appropriate number of replicas and move its replicas to the appropriate stores
+based on zone config's constraints.
 
--   range-spanning tree node links
+# Self Repair
 
--   participating replicas
+If a store has not been heard from (gossiped their descriptors) in some time,
+the default setting being 5 minutes, the cluster will consider this store to be
+dead. When this happens, all ranges that have replicas on that store are
+determined to be unavailable and removed. These ranges will then upreplicate
+themselves to other available stores until their desired replication factor is
+again met. If 50% or more of the replicas are unavailable at the same time,
+there is no quorum and the whole range will be considered unavailable until at
+least greater than 50% of the replicas are again available.
 
--   consensus metadata
+# Rebalancing
 
--   split/merge activity
+As more data are added to the system, some stores may grow faster than others.
+To combat this and to spread the overall load across the full cluster, replicas
+will be moved between stores maintaining the desired replication factor. The
+heuristics used to perform this rebalancing include:
 
-A really good reference on tuning Linux installations with RocksDB is
-[here](http://docs.basho.com/riak/latest/ops/advanced/backends/leveldb/).
+- the number of replicas per store
+- the total size of the data used per store
+- free space available per store
+
+In the future, some other factors that might be considered include:
+
+- cpu/network load per store
+- ranges that are used together often in queries
+- number of active ranges per store
+- number of range leases held per store
 
 # Range Metadata
 
@@ -640,7 +626,7 @@ The default approximate size of a range is 64M (2\^26 B). In order to
 support 1P (2\^50 B) of logical data, metadata is needed for roughly
 2\^(50 - 26) = 2\^24 ranges. A reasonable upper bound on range metadata
 size is roughly 256 bytes (3\*12 bytes for the triplicated node
-locations and 220 bytes for the range key itself*). 2\^24 ranges \* 2\^8
+locations and 220 bytes for the range key itself). 2\^24 ranges \* 2\^8
 B would require roughly 4G (2\^32 B) to store--too much to duplicate
 between machines. Our conclusion is that range metadata must be
 distributed for large installations.
@@ -663,9 +649,10 @@ is sparse, the successor key is defined as the next key which is present. The
 found using the same process. The *meta2* record identifies the range
 containing `key1`, which is again found the same way (see examples below).
 
-Concretely, metadata keys are prefixed by `\0\0meta{1,2}`; the two null
-characters provide for the desired sorting behaviour. Thus, `key1`'s
-*meta1* record will reside at the successor key to `\0\0\meta1<key1>`.
+Concretely, metadata keys are prefixed by `\x02` (meta1) and `\x03`
+(meta2); the prefixes `\x02` and `\x03` provide for the desired
+sorting behaviour. Thus, `key1`'s *meta1* record will reside at the
+successor key to `\x02<key1>`.
 
 Note: we append the end key of each range to meta{1,2} records because
 the RocksDB iterator only supports a Seek() interface which acts as a
@@ -675,18 +662,20 @@ result in having to back the iterator up, an option which is both less
 efficient and not available in all cases.
 
 The following example shows the directory structure for a map with
-three ranges worth of data. Ellipses indicate additional key/value pairs to
-fill an entire range of data. Except for the fact that splitting ranges
-requires updates to the range metadata with knowledge of the metadata layout,
-the range metadata itself requires no special treatment or bootstrapping.
+three ranges worth of data. Ellipses indicate additional key/value
+pairs to fill an entire range of data. For clarity, the examples use
+`meta1` and `meta2` to refer to the prefixes `\x02` and `\x03`. Except
+for the fact that splitting ranges requires updates to the range
+metadata with knowledge of the metadata layout, the range metadata
+itself requires no special treatment or bootstrapping.
 
 **Range 0** (located on servers `dcrama1:8000`, `dcrama2:8000`,
   `dcrama3:8000`)
 
-- `\0\0meta1\xff`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
-- `\0\0meta2<lastkey0>`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
-- `\0\0meta2<lastkey1>`: `dcrama4:8000`, `dcrama5:8000`, `dcrama6:8000`
-- `\0\0meta2\xff`: `dcrama7:8000`, `dcrama8:8000`, `dcrama9:8000`
+- `meta1\xff`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
+- `meta2<lastkey0>`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
+- `meta2<lastkey1>`: `dcrama4:8000`, `dcrama5:8000`, `dcrama6:8000`
+- `meta2\xff`: `dcrama7:8000`, `dcrama8:8000`, `dcrama9:8000`
 - ...
 - `<lastkey0>`: `<lastvalue0>`
 
@@ -709,8 +698,8 @@ located in the same range:
 **Range 0** (located on servers `dcrama1:8000`, `dcrama2:8000`,
 `dcrama3:8000`)*
 
-- `\0\0meta1\xff`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
-- `\0\0meta2\xff`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
+- `meta1\xff`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
+- `meta2\xff`: `dcrama1:8000`, `dcrama2:8000`, `dcrama3:8000`
 - `<key0>`: `<value0>`
 - `...`
 
@@ -720,20 +709,20 @@ example is simplified to just show range indexes):
 
 **Range 0**
 
-- `\0\0meta1<lastkeyN-1>`: Range 0
-- `\0\0meta1\xff`: Range 1
-- `\0\0meta2<lastkey1>`:  Range 1
-- `\0\0meta2<lastkey2>`:  Range 2
-- `\0\0meta2<lastkey3>`:  Range 3
+- `meta1<lastkeyN-1>`: Range 0
+- `meta1\xff`: Range 1
+- `meta2<lastkey1>`:  Range 1
+- `meta2<lastkey2>`:  Range 2
+- `meta2<lastkey3>`:  Range 3
 - ...
-- `\0\0meta2<lastkeyN-1>`: Range 262143
+- `meta2<lastkeyN-1>`: Range 262143
 
 **Range 1**
 
-- `\0\0meta2<lastkeyN>`: Range 262144
-- `\0\0meta2<lastkeyN+1>`: Range 262145
+- `meta2<lastkeyN>`: Range 262144
+- `meta2<lastkeyN+1>`: Range 262145
 - ...
-- `\0\0meta2\xff`: Range 500,000
+- `meta2\xff`: Range 500,000
 - ...
 - `<lastkey1>`: `<lastvalue1>`
 
@@ -766,8 +755,8 @@ versa.
 From the examples above it’s clear that key location lookups require at
 most three reads to get the value for `<key>`:
 
-1. lower bound of `\0\0meta1<key>`
-2. lower bound of `\0\0meta2<key>`,
+1. lower bound of `meta1<key>`
+2. lower bound of `meta2<key>`,
 3. `<key>`.
 
 For small maps, the entire lookup is satisfied in a single RPC to Range 0. Maps
@@ -806,23 +795,25 @@ batch processing of requests.
 Future optimizations may include two-phase elections and quiescent ranges
 (i.e. stopping traffic completely for inactive ranges).
 
-# Range Leadership (Leader Leases)
+# Range Leases
 
 As outlined in the Raft section, the replicas of a Range are organized as a
 Raft group and execute commands from their shared commit log. Going through
 Raft is an expensive operation though, and there are tasks which should only be
 carried out by a single replica at a time (as opposed to all of them).
+In particular, it is desirable to serve authoritative reads from a single
+Replica (ideally from more than one, but that is far more difficult).
 
-For these reasons, Cockroach introduces the concept of **Range Leadership**:
+For these reasons, Cockroach introduces the concept of **Range Leases**:
 This is a lease held for a slice of (database, i.e. hybrid logical) time and is
 established by committing a special log entry through Raft containing the
-interval the leadership is going to be active on, along with the Node:RaftID
+interval the lease is going to be active on, along with the Node:RaftID
 combination that uniquely describes the requesting replica. Reads and writes
 must generally be addressed to the replica holding the lease; if none does, any
 replica may be addressed, causing it to try to obtain the lease synchronously.
-Requests received by a non-leader (for the HLC timestamp specified in the
+Requests received by a non-lease holder (for the HLC timestamp specified in the
 request's header) fail with an error pointing at the replica's last known
-leader. These requests are retried transparently with the updated leader by the
+lease holder. These requests are retried transparently with the updated lease by the
 gateway node and never reach the client.
 
 The replica holding the lease is in charge or involved in handling
@@ -837,68 +828,68 @@ overhead of going through Raft.
 Since reads bypass Raft, a new lease holder will, among other things, ascertain
 that its timestamp cache does not report timestamps smaller than the previous
 lease holder's (so that it's compatible with reads which may have occurred on
-the former leader). This is accomplished by setting the low water mark of the
-timestamp cache to the expiration of the previous lease plus the maximum clock
-offset.
+the former lease holder). This is accomplished by letting leases enter
+a <i>stasis period</i> (which is just the expiration minus the maximum clock
+offset) before the actual expiration of the lease, so that all the next lease
+holder has to do is set the low water mark of the timestamp cache to its
+new lease's start time.
 
-## Relationship to Raft leadership
+As a lease enters its stasis period, no more reads or writes are served, which
+is undesirable. However, this would only happen in practice if a node became
+unavailable. In almost all practical situations, no unavailability results
+since leases are usually long-lived (and/or eagerly extended, which can avoid
+the stasis period) or proactively transferred away from the lease holder, which
+can also avoid the stasis period by promising not to serve any further reads
+until the next lease goes into effect.
 
-Range leadership is completely separate from Raft leadership, and so without
-further efforts, Raft and Range leadership may not be represented by the same
-replica most of the time. This is convenient semantically since it decouples
-these two types of leadership and allows the use of Raft as a "black box", but
-for reasons of performance, it is desirable to have both on the same replica.
-Otherwise, sending a command through Raft always incurs the overhead of being
-proposed to the Range leader's Raft instance first, which must relay it to the
-Raft leader, which finally commits it into the log and updates its followers,
-including the Range leader. This yields correct results but wastes several
-round-trip delays, and so we will make sure that in the vast majority of cases
-Range and Raft leadership coincide. A fairly easy method for achieving this is
-to have each new lease period (extension or new) be accompanied by a
-stipulation to the lease holder's replica to start Raft elections (unless it's
-already leading), though some care should be taken that Range leadership is
-relatively stable and long-lived to avoid a large number of Raft leadership
-transitions.
+## Colocation with Raft leadership
+
+The range lease is completely separate from Raft leadership, and so without
+further efforts, Raft leadership and the Range lease might not be held by the
+same Replica. Since it's expensive to not have these two roles colocated (the
+lease holder has to forward each proposal to the leader, adding costly RPC
+round-trips), each lease renewal or transfer also attempts to colocate them.
+In practice, that means that the mismatch is rare and self-corrects quickly.
 
 ## Command Execution Flow
 
-This subsection describes how a leader replica processes a read/write
-command in more details. Each command specifies (1) a key (or a range
-of keys) that the command accesses and (2) the ID of a range which the
-key(s) belongs to. When receiving a command, a RoachNode looks up a
-range by the specified Range ID and checks if the range is still
-responsible for the supplied keys. If any of the keys do not belong to the
-range, the RoachNode returns an error so that the client will retry
-and send a request to a correct range.
+This subsection describes how a lease holder replica processes a
+read/write command in more details. Each command specifies (1) a key
+(or a range of keys) that the command accesses and (2) the ID of a
+range which the key(s) belongs to. When receiving a command, a node
+looks up a range by the specified Range ID and checks if the range is
+still responsible for the supplied keys. If any of the keys do not
+belong to the range, the node returns an error so that the client will
+retry and send a request to a correct range.
 
-When all the keys belong to the range, the RoachNode attempts to
+When all the keys belong to the range, the node attempts to
 process the command. If the command is an inconsistent read-only
 command, it is processed immediately. If the command is a consistent
 read or a write, the command is executed when both of the following
 conditions hold:
 
-- The range replica has a leader lease.
+- The range replica has a range lease.
 - There are no other running commands whose keys overlap with
 the submitted command and cause read/write conflict.
 
 When the first condition is not met, the replica attempts to acquire
 a lease or returns an error so that the client will redirect the
-command to the current leader. The second condition guarantees that
+command to the current lease holder. The second condition guarantees that
 consistent read/write commands for a given key are sequentially
 executed.
 
-When the above two conditions are met, the leader replica processes the
-command. Consistent reads are processed on the leader immediately.
-Write commands are commited into the Raft log so that every replica
+When the above two conditions are met, the lease holder replica processes the
+command. Consistent reads are processed on the lease holder immediately.
+Write commands are committed into the Raft log so that every replica
 will execute the same commands. All commands produce deterministic
 results so that the range replicas keep consistent states among them.
 
 When a write command completes, all the replica updates their response
-cache to ensure idempotency. When a read command completes, the leader
+cache to ensure idempotency. When a read command completes, the lease holder
 replica updates its timestamp cache to keep track of the latest read
 for a given key.
 
-There is a chance that a leader lease gets expired while a command is
+There is a chance that a range lease gets expired while a command is
 executed. Before executing a command, each replica checks if a replica
 proposing the command has a still lease. When the lease has been
 expired, the command will be rejected by the replica.
@@ -906,7 +897,7 @@ expired, the command will be rejected by the replica.
 
 # Splitting / Merging Ranges
 
-RoachNodes split or merge ranges based on whether they exceed maximum or
+Nodes split or merge ranges based on whether they exceed maximum or
 minimum thresholds for capacity or load. Ranges exceeding maximums for
 either capacity or load are split; ranges below minimums for *both*
 capacity and load are merged.
@@ -923,7 +914,7 @@ passing along relevant metrics if they’re in the bottom or top of the
 range it’s aware of.
 
 A range finding itself exceeding either capacity or load threshold
-splits. To this end, the range leader computes an appropriate split key
+splits. To this end, the range lease holder computes an appropriate split key
 candidate and issues the split through Raft. In contrast to splitting,
 merging requires a range to be below the minimum threshold for both
 capacity *and* load. A range being merged chooses the smaller of the
@@ -938,7 +929,7 @@ from the timestamp of the snapshot to catch up fully. Once the new
 replicas are fully up to date, the range metadata is updated and old,
 source replica(s) deleted if applicable.
 
-**Coordinator** (leader replica)
+**Coordinator** (lease holder replica)
 
 ```
 if splitting
@@ -969,7 +960,7 @@ else if rebalancing || recovering
   remove old range replica(s)
 ```
 
-RoachNodes split ranges when the total data in a range exceeds a
+Nodes split ranges when the total data in a range exceeds a
 configurable maximum threshold. Similarly, ranges are merged when the
 total data falls below a configurable minimum threshold.
 
@@ -983,60 +974,10 @@ spare capacity is chosen in the same datacenter and a special-case split
 is done which simply duplicates the data 1:1 and resets the range
 configuration metadata.
 
-# Range-Spanning Binary Tree
-
-A crucial enhancement to the organization of range metadata is to
-augment the bi-level range metadata lookup with a minimum spanning tree,
-implemented as a left-leaning red-black tree over all ranges in the map.
-This tree structure allows the system to start at any key prefix and
-efficiently traverse an arbitrary key range with minimal RPC traffic,
-minimal fan-in and fan-out, and with bounded time complexity equal to
-`2*log N` steps, where `N` is the total number of ranges in the system.
-
-Unlike the range metadata rows prefixed with `\0\0meta[1|2]`, the
-metadata for the range-spanning tree (e.g. parent range and left / right
-child ranges) is stored directly at the ranges as non-map metadata. The
-metadata for each node of the tree (e.g. links to parent range, left
-child range, and right child range) is stored with the range metadata.
-In effect, the tree metadata is stored implicitly. In order to traverse
-the tree, for example, you’d need to query each range in turn for its
-metadata.
-
-Any time a range is split or merged, both the bi-level range lookup
-metadata and the per-range binary tree metadata are updated as part of
-the same distributed transaction. The total number of nodes involved in
-the update is bounded by 2 + log N (i.e. 2 updates for meta1 and
-meta2, and up to log N updates to balance the range-spanning tree).
-The range corresponding to the root node of the tree is stored in
-*\0tree_root*.
-
-As an example, consider the following set of nine ranges and their
-associated range-spanning tree:
-
-R0: `aa - cc`, R1: `*cc - lll`, R2: `*lll - llr`, R3: `*llr - nn`, R4: `*nn - rr`, R5: `*rr - ssss`, R6: `*ssss - sst`, R7: `*sst - vvv`, R8: `*vvv - zzzz`.
-
-![Range Tree](media/rangetree.png)
-
-The range-spanning tree has many beneficial uses in Cockroach. It
-provides a ready made solution to scheduling mappers and sorting /
-reducing during map-reduce operations. It also provides a mechanism
-for visiting every Raft replica range which comprises a logical key
-range. This is used to periodically find the oldest extant write
-intent over the entire system.
-
-The range-spanning tree provides a convenient mechanism for planning
-and executing parallel queries. These provide the basis for
-[Dremel](http://static.googleusercontent.com/media/research.google.com/en/us/pubs/archive/36632.pdf)-like
-query execution trees and it’s easy to imagine supporting a subset of
-SQL or even javascript-based user functions for complex data analysis
-tasks.
-
-
-
 # Node Allocation (via Gossip)
 
 New nodes must be allocated when a range is split. Instead of requiring
-every RoachNode to know about the status of all or even a large number
+every node to know about the status of all or even a large number
 of peer nodes --or-- alternatively requiring a specialized curator or
 master with sufficiently global knowledge, we use a gossip protocol to
 efficiently communicate only interesting information between all of the
@@ -1092,36 +1033,31 @@ The gossip protocol itself contains two primary components:
   node has seen. Each round of gossip communicates only the delta
   containing new items.
 
-# Node Accounting
+# Node and Cluster Metrics
 
-The gossip protocol discussed in the previous section is useful to
-quickly communicate fragments of important information in a
-decentralized manner. However, complete accounting for each node is also
-stored to a central location, available to any dashboard process. This
-is done using the map itself. Each node periodically writes its state to
-the map with keys prefixed by `\0node`, similar to the first level of
-range metadata, but with an ‘`node`’ suffix. Each value is a protobuf
-containing the full complement of node statistics--everything
-communicated normally via the gossip protocol plus other useful, but
-non-critical data.
+Every component of the system is responsible for exporting interesting
+metrics about itself. These could be histograms, throughput counters, or
+gauges.
 
-The range containing the first key in the node accounting table is
-responsible for gossiping the total count of nodes. This total count is
-used by the gossip network to most efficiently organize itself. In
-particular, the maximum number of hops for gossipped information to take
-before reaching a node is given by `ceil(log(node count) / log(max
-fanout)) + 1`.
+These metrics are exported for external monitoring systems (such as Prometheus)
+via a HTTP endpoint, but CockroachDB also implements an internal timeseries
+database which is stored in the replicated key-value map.
 
-# Key-prefix Accounting, Zones & Permissions
+Time series are stored at Store granularity and allow the admin dashboard
+to efficiently gain visibility into a universe of information at the Cluster,
+Node or Store level. A [periodic background process](RFCS/time_series_culling.md)
+culls older timeseries data, downsampling and eventually discarding it.
 
-Arbitrarily fine-grained accounting and permissions are specified via
+# Key-prefix Accounting and Zones
+
+Arbitrarily fine-grained accounting is specified via
 key prefixes. Key prefixes can overlap, as is necessary for capturing
 hierarchical relationships. For illustrative purposes, let’s say keys
 specifying rows in a set of databases have the following format:
 
 `<db>:<table>:<primary-key>[:<secondary-key>]`
 
-In this case, we might collect accounting or specify permissions with
+In this case, we might collect accounting with
 key prefixes:
 
 `db1`, `db1:user`, `db1:order`,
@@ -1134,7 +1070,7 @@ the accounting system table. The format of accounting table keys is:
 
 `\0acct<key-prefix>`
 
-In practice, we assume each RoachNode capable of caching the
+In practice, we assume each node is capable of caching the
 entire accounting table as it is likely to be relatively small.
 
 Accounting is kept for key prefix ranges with eventual consistency for
@@ -1192,7 +1128,7 @@ Accounting keys for system state have the form:
 character. It’s meant to sort the root level account AFTER any other
 system tables. They must increment the same underlying values as they
 are permanent counts, and not transient activity. Logic at the
-RoachNode takes care of snapshotting the value into an appropriately
+node takes care of snapshotting the value into an appropriately
 suffixed (e.g. with timestamp hour) multi-value time series entry.
 
 Keys for perf/load metrics:
@@ -1220,59 +1156,140 @@ configuration applies. Zone values specify a protobuf containing
 the datacenters from which replicas for ranges which fall under
 the zone must be chosen.
 
-Please see [config/config.proto](https://github.com/cockroachdb/cockroach/blob/master/config/config.proto) for up-to-date data structures used, the best entry point being `message ZoneConfig`.
+Please see [pkg/config/config.proto](https://github.com/cockroachdb/cockroach/blob/master/pkg/config/config.proto) for up-to-date data structures used, the best entry point being `message ZoneConfig`.
 
-If zones are modified in situ, each RoachNode verifies the
+If zones are modified in situ, each node verifies the
 existing zones for its ranges against the zone configuration. If
 it discovers differences, it reconfigures ranges in the same way
 that it rebalances away from busy nodes, via special-case 1:1
 split to a duplicate range comprising the new configuration.
 
-## Permissions
-permissions are stored in the map with keys prefixed by *\0perm* followed by
-the key prefix and user to which the specified permissions apply. The format of
-permissions keys is:
+# SQL
 
-`\0perm<key-prefix><user>`
+Each node in a cluster can accept SQL client connections. CockroachDB
+supports the PostgreSQL wire protocol, to enable reuse of native
+PostgreSQL client drivers. Connections using SSL and authenticated
+using client certificates are supported and even encouraged over
+unencrypted (insecure) and password-based connections.
 
-Permission values are a protobuf containing the permission details;
-please see [config/config.proto](https://github.com/cockroachdb/cockroach/blob/master/config/config.proto) for up-to-date data structures used, the best entry point being `message PermConfig`.
+Each connection is associated with a SQL session which holds the
+server-side state of the connection. Over the lifespan of a session
+the client can send SQL to open/close transactions, issue statements
+or queries or configure session parameters, much like with any other
+SQL database.
 
-A default system root permission is assumed for the entire map
-with an empty key prefix and read/write as true.
+## Language support
 
-When determining whether or not to allow a read or a write a key
-value (e.g. `db1:user:1` for user `spencer`), a RoachNode would
-read the following permissions values:
+CockroachDB also attempts to emulate the flavor of SQL supported by
+PostgreSQL, although it also diverges in significant ways:
 
-```
-\0perm<db1:user:1>spencer
-\0perm<db1:user>spencer
-\0perm<db1>spencer
-\0perm<>spencer
-```
+- CockroachDB exclusively implements MVCC-based consistency for
+  transactions, and thus only supports SQL's isolation levels SNAPSHOT
+  and SERIALIZABLE.  The other traditional SQL isolation levels are
+  internally mapped to either SNAPSHOT or SERIALIZABLE.
 
-If any prefix in the hierarchy provides the required permission,
-the request is satisfied; otherwise, the request returns an
-error.
+- CockroachDB implements its own [SQL type system](RFCS/typing.md)
+  which only supports a limited form of implicit coercions between
+  types compared to PostgreSQL. The rationale is to keep the
+  implementation simple and efficient, capitalizing on the observation
+  that 1) most SQL code in clients is automatically generated with
+  coherent typing already and 2) existing SQL code for other databases
+  will need to be massaged for CockroachDB anyways.
 
-The priority for a user permission is used to order requests at
-Raft consensus ranges and for choosing an initial priority for
-distributed transactions. When scheduling operations at the Raft
-consensus range, all outstanding requests are ordered by key
-prefix and each assigned priorities according to key, user and
-arrival time. The next request is chosen probabilistically using
-priorities to weight the choice. Each key can have multiple
-priorities as they’re hierarchical (e.g. for /user/key, one
-priority for root ‘/’, and one for ‘/user/key’). The most general
-priority is used first. If two keys share the most general, then
-they’re compared with the next most general if applicable, and so on.
+## SQL architecture
 
-# Key-Value API
+Client connections over the network are handled in each node by a
+pgwire server process (goroutine). This handles the stream of incoming
+commands and sends back responses including query/statement results.
+The pgwire server also handles pgwire-level prepared statements,
+binding prepared statements to arguments and looking up prepared
+statements for execution.
 
-see the protobufs in [roachpb/](https://github.com/cockroachdb/cockroach/blob/master/roachpb),
-in particular [roachpb/api.proto](https://github.com/cockroachdb/cockroach/blob/master/roachpb/api.proto) and the comments within.
+Meanwhile the state of a SQL connection is maintained by a Session
+object and a monolithic `planner` object (one per connection) which
+coordinates execution between the session, the current SQL transaction
+state and the underlying KV store.
 
-# Structured Data API
+Upon receiving a query/statement (either directly or via an execute
+command for a previously prepared statement) the pgwire server forwards
+the SQL text to the `planner` associated with the connection. The SQL
+code is then transformed into a SQL query plan.
+The query plan is implemented as a tree of objects which describe the
+high-level data operations needed to resolve the query, for example
+"join", "index join", "scan", "group", etc.
 
-A preliminary design can be found in the [Go source documentation](http://godoc.org/github.com/cockroachdb/cockroach/structured).
+The query plan objects currently also embed the run-time state needed
+for the execution of the query plan. Once the SQL query plan is ready,
+methods on these objects then carry the execution out in the fashion
+of "generators" in other programming languages: each node *starts* its
+children nodes and from that point forward each child node serves as a
+*generator* for a stream of result rows, which the parent node can
+consume and transform incrementally and present to its own parent node
+also as a generator.
+
+The top-level planner consumes the data produced by the top node of
+the query plan and returns it to the client via pgwire.
+
+## Data mapping between the SQL model and KV
+
+Every SQL table has a primary key in CockroachDB. (If a table is created
+without one, an implicit primary key is provided automatically.)
+The table identifier, followed by the value of the primary key for
+each row, are encoded as the *prefix* of a key in the underlying KV
+store.
+
+Each remaining column or *column family* in the table is then encoded
+as a value in the underlying KV store, and the column/family identifier
+is appended as *suffix* to the KV key.
+
+For example:
+
+- after table `customers` is created in a database `mydb` with a
+primary key column `name` and normal columns `address` and `URL`, the KV pairs
+to store the schema would be:
+
+| Key                          | Values |
+| ---------------------------- | ------ |
+| `/system/databases/mydb/id`  | 51     |
+| `/system/tables/customer/id` | 42     |
+| `/system/desc/51/42/address` | 69     |
+| `/system/desc/51/42/url`     | 66     |
+
+(The numeric values on the right are chosen arbitrarily for the
+example; the structure of the schema keys on the left is simplified
+for the example and subject to change.)  Each database/table/column
+name is mapped to a spontaneously generated identifier, so as to
+simplify renames.
+
+Then for a single row in this table:
+
+| Key               | Values                           |
+| ----------------- | -------------------------------- |
+| `/51/42/Apple/69` | `1 Infinite Loop, Cupertino, CA` |
+| `/51/42/Apple/66` | `http://apple.com/`              |
+
+Each key has the table prefix `/51/42` followed by the primary key
+prefix `/Apple` followed by the column/family suffix (`/66`,
+`/69`). The KV value is directly encoded from the SQL value.
+
+Efficient storage for the keys is guaranteed by the underlying RocksDB engine
+by means of prefix compression.
+
+Finally, for SQL indexes, the KV key is formed using the SQL value of the
+indexed columns, and the KV value is the KV key prefix of the rest of
+the indexed row.
+
+# References
+
+[0]: http://rocksdb.org/
+[1]: https://github.com/google/leveldb
+[2]: https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf
+[3]: http://research.google.com/archive/spanner.html
+[4]: http://research.google.com/pubs/pub36971.html
+[5]: https://github.com/cockroachdb/cockroach/tree/master/sql
+[7]: https://godoc.org/github.com/cockroachdb/cockroach/kv
+[8]: https://github.com/cockroachdb/cockroach/tree/master/kv
+[9]: https://godoc.org/github.com/cockroachdb/cockroach/server
+[10]: https://github.com/cockroachdb/cockroach/tree/master/server
+[11]: https://godoc.org/github.com/cockroachdb/cockroach/storage
+[12]: https://github.com/cockroachdb/cockroach/tree/master/storage

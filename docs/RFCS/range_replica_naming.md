@@ -1,7 +1,7 @@
 - Feature Name: range_replica_naming
 - Status: completed
 - Start Date: 2015-07-29
-- RFC PR: #1864
+- RFC PR: [#1864](https://github.com/cockroachdb/cockroach/pull/1864)
 - Cockroach Issue:
 
 # Summary
@@ -18,7 +18,7 @@ in code the `storage.Range` type refers to the latter. This was a
 deliberate at the time because (at least in code) the latter is more
 common than the former. However, resolving certain issues related to
 replication and splits requires us to be precise about the difference,
-so I propose separating the the two usages to improve clarity.
+so I propose separating the two usages to improve clarity.
 
 # Detailed design
 

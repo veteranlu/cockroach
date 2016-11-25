@@ -1,19 +1,14 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -eux
+set -euxo pipefail
 
-$(dirname $0)/build-docker-deploy.sh
+"$(dirname "${0}")"/build-docker-deploy.sh
 
-cd $(dirname $0)/../acceptance
-if [ -f ./acceptance.test ]; then
-  time ./acceptance.test -i cockroachdb/cockroach -b /cockroach/cockroach \
-    -test.v -test.timeout -5m
-fi
+cd "$(dirname "${0}")"/../pkg/acceptance
+time ./acceptance.test -i cockroachdb/cockroach -b /cockroach/cockroach -nodes 3 -test.v -test.timeout -5m
 
-docker tag cockroachdb/cockroach:latest cockroachdb/cockroach:${VERSION}
+docker tag cockroachdb/cockroach cockroachdb/cockroach:"${VERSION}"
 
-for version in latest ${VERSION}; do
-  # Pushing to the registry just fails sometimes, so for the time
-  # being just make this a best-effort action.
-  docker push cockroachdb/cockroach:${version} || true
-done
+# Pushing to the registry just fails sometimes, so for the time
+# being just make this a best-effort action.
+docker push cockroachdb/cockroach || true

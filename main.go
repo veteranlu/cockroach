@@ -10,22 +10,19 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
 // implied. See the License for the specific language governing
-// permissions and limitations under the License. See the AUTHORS file
-// for names of contributors.
+// permissions and limitations under the License.
 //
 // Author: Spencer Kimball (spencer.kimball@gmail.com)
 
 package main
-
-//go:generate make -C .. -f cockroach/build/protobuf.mk
 
 import (
 	"fmt"
 	"math/rand"
 	"os"
 
-	"github.com/cockroachdb/cockroach/cli"
-	"github.com/cockroachdb/cockroach/util/randutil"
+	"github.com/cockroachdb/cockroach/pkg/cli"
+	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 )
 
 func main() {
@@ -36,7 +33,7 @@ func main() {
 		os.Args = append(os.Args, "help")
 	}
 	if err := cli.Run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed running command %q: %v\n", os.Args[1:], err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "Failed running %q\n", os.Args[1])
+		os.Exit(cli.ErrorCode)
 	}
 }

@@ -18,7 +18,7 @@ any significant amount of data. Additionally, the single transaction
 approach necessitates reading the table descriptor on every SQL
 operation which is a significant performance bottleneck.
 
-We will implement online schema changed which breaks down a high-level
+We will implement online schema change which breaks down a high-level
 schema change operation such as `CREATE INDEX` into a series of
 discrete steps in such a way that user transactions are never blocked
 from accessing the table and yet never leave table or index data in an
@@ -89,7 +89,7 @@ data. This operation is performed when the index is in the
 table. As such, it is infeasible for this backfilling to be performed
 transactionally: the transaction would create an unreasonable number
 of write intents and user transactions could cause the transaction to
-abort. Instead, backfill be performed as a series of small
+abort. Instead, backfill will be performed as a series of small
 transactions that process a fraction of the table at a time:
 
 ```go
@@ -130,11 +130,11 @@ primary index for the table and deletes the column keys.
 Since schema change operations are potentially long running they need
 to be restartable or abortable if the node performing them dies. We
 accomplish this by performing the schema change operation for a table
-on a well known node: the replica holding the leader lease for the
+on a well known node: the replica holding the range lease for the
 first range of the table (i.e. containing the key `/<tableID>`). When
 a node receives a schema change operation such as `CREATE INDEX` it
-will forward the operation to this "table leader". When the table
-leader restarts it will load the associated table descriptor and
+will forward the operation to this "table lease holder". When the table
+lease holder restarts it will load the associated table descriptor and
 restart or abort the schema change operation. Note that aborting a
 schema change operation needs to maintain the invariant that the
 descriptor version only increase.
